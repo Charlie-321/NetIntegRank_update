@@ -2,7 +2,7 @@
 
 Dysregulated subnetworks → integrated evidence ranking.
 
-NetIntegRank is a modular Nextflow pipeline for identifying dysregulated subnetworks from a user-supplied gene-level score file and prioritising candidate targets by integrating network topology, structural druggability, and optional features.
+NetIntegRank is a modular Nextflow pipeline for identifying dysregulated subnetworks from a user-supplied gene-level score file and prioritising candidate targets by ranking on network topology, with structural druggability, ML scores, and citation counts appended as reference annotations (not used in the rank calculation unless explicitly requested).
 
 This repository reflects the workflow developed during my PhD. The broader project data and related analyses can be found in the repository: `https://github.com/talgalper/PhD-MOC.git`.
 
@@ -22,11 +22,11 @@ NetIntegRank currently runs three main stages:
    - calculates node-level network metrics
 
 3. **Ranking**
-   - integrates network metrics with druggability scores
-   - appends ML scores and citation counts
+   - ranks candidates on network topology metrics
+   - appends druggability scores, ML scores, and citation counts
    - outputs ranked, incomplete, and filtered result tables
 
-By default, **ML scores and citation counts are appended to the final outputs but are not used in the rank calculation unless explicitly included in `--ranking_features`**.
+By default, **druggability scores, ML scores, and citation counts are appended to the final outputs but are not used in the rank calculation unless explicitly included in `--ranking_features`**.
 
 ---
 
@@ -193,7 +193,7 @@ The params can be run in command line as well if you want to do your own scripti
     --hhnet_min_cluster_size 2 \
     --hhnet_n_clusters 0 \
     --ranking_network neighbours \
-    --ranking_features "degree,betweenness,closeness,eigen_centrality,page_rank,drug_score"
+    --ranking_features "degree,betweenness,closeness,eigen_centrality,page_rank"
   ```
 </details>
 
@@ -279,6 +279,8 @@ Required columns:
 * `drug_score`
 
 These scores represent structural druggability estimates derived from pocket-detection workflows from Fpocket and PocketMiner.
+
+`drug_score` is treated the same way as ML scores and citation counts: it is merged in and appended to the final output tables for reference, but it is **excluded from the default `--ranking_features`** and therefore does not influence `avg_rank` / `rank_variance` unless you explicitly add `drug_score` back to `--ranking_features`.
 
 ---
 
@@ -395,9 +397,13 @@ If `--gene_map` is not provided, the ranking stage attempts to reuse an annotati
 
 * `--ranking_features` \
   Default:
-  `degree,betweenness,closeness,eigen_centrality,page_rank,drug_score`
+  `degree,betweenness,closeness,eigen_centrality,page_rank`
 
-  Comma-separated numeric columns used in the averaged ranking.
+  Comma-separated numeric columns used in the averaged ranking. `drug_score`
+  (druggability) is deliberately excluded from this default — it is still
+  appended to the output tables for reference, but pass it explicitly (e.g.
+  `--ranking_features "degree,...,page_rank,drug_score"`) to fold it back
+  into the rank calculation.
 
 * `--negative_features` 
   Optional - Comma-separated features that should be treated as negatively oriented during ranking.
@@ -481,13 +487,13 @@ Main outputs:
   Final ranked table for complete cases included in ranking.
 
 * `final_ranked_incomplete.tsv`
-  Rows retained for reporting but excluded from complete ranking because one or more required ranking fields were missing (e.g. `drug_score`).
+  Rows retained for reporting but excluded from complete ranking because one or more fields in `--ranking_features` were missing (e.g. a network metric such as `degree`). `drug_score` no longer gates this, since it sits outside `--ranking_features` by default.
 
 * `final_ranked_missing_external_gene_name.csv`
   Rows removed because `external_gene_name` could not be resolved.
 
 * `final_ranked_missing_annotations.tsv`
-  Ranked genes that could not be matched to one or more annotation sources (ML scores and/or citation counts). These genes are still present in `final_ranked.tsv` with `NA` in the unmatched columns. The `missing_annotation_fields` column lists which source(s) were absent (e.g. `counts`, `Prediction_Score_rf`, or `counts;Prediction_Score_rf`).
+  Ranked genes that could not be matched to one or more annotation sources (druggability scores, ML scores, and/or citation counts). These genes are still present in `final_ranked.tsv` with `NA` in the unmatched columns. The `missing_annotation_fields` column lists which source(s) were absent (e.g. `counts`, `Prediction_Score_rf`, `drug_score`, or `counts;Prediction_Score_rf`).
 
 ---
 

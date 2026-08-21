@@ -16,8 +16,8 @@ option_list <- list(
   make_option("--gene_map", type = "character", default = NULL,
               help = "Optional mapping table (TSV/CSV). Required columns: ensembl_gene_id, uniprot_gn_id."),
   make_option("--ranking_features", type = "character",
-              default = "degree,betweenness,closeness,eigen_centrality,page_rank,drug_score",
-              help = "Comma-separated feature columns to use in the sensitivity ranking."),
+              default = "degree,betweenness,closeness,eigen_centrality,page_rank",
+              help = "Comma-separated feature columns to use in the sensitivity ranking. drug_score is appended to the output for reference but excluded from this default; pass it explicitly to include it in the ranking."),
   make_option("--negative_features", type = "character", default = "",
               help = "Optional comma-separated ranking features to subtract rather than add."),
   make_option("--step", type = "double", default = 0.1,
@@ -502,9 +502,11 @@ if (length(non_numeric) > 0) {
 }
 
 # Only enforce completeness on the selected primary ID, not the alternate ID.
+# drug_score is intentionally excluded here: it is treated like ml_scores/citations
+# (appended to the output for reference) and only gates completeness when the
+# caller explicitly opts it into --ranking_features.
 required_for_ranking <- unique(c(
   primary_id_col,
-  "drug_score",
   ranking_features
 ))
 
@@ -531,13 +533,16 @@ RS_data <- avg_rank_sensitivity(rank_input,
                                 negative_features = negative_features,
                                 step = args$step)
 
-# Reattach counts using the chosen primary identifier.
-append_cols <- rank_data_complete[, c(primary_id_col, "counts"), drop = FALSE]
+# Reattach counts and drug_score using the chosen primary identifier.
+# drug_score is carried through for reference only (see required_for_ranking above);
+# it does not influence avg_rank/rank_variance unless the caller added it to
+# --ranking_features.
+append_cols <- rank_data_complete[, c(primary_id_col, "counts", "drug_score"), drop = FALSE]
 append_cols <- append_cols[!duplicated(append_cols[[primary_id_col]]), , drop = FALSE]
 
 RS_data <- left_join_first(RS_data, append_cols,
                            by_x = primary_id_col, by_y = primary_id_col,
-                           cols_y = "counts")
+                           cols_y = c("counts", "drug_score"))
 
 # add uniprot only after ranking
 if (!is.null(args$gene_map) && nzchar(args$gene_map)) {
@@ -573,7 +578,8 @@ RS_data <- left_join_first(RS_data, ml_scores,
                            cols_y = "Prediction_Score_rf")
 
 RS_data <- RS_data[, c("external_gene_name", "ensembl_gene_id", "uniprot_gn_id",
-                       "avg_rank", "rank_variance", "counts", "Prediction_Score_rf"),
+                       "avg_rank", "rank_variance", "counts", "Prediction_Score_rf",
+                       "drug_score"),
                    drop = FALSE]
 RS_data <- RS_data[order(RS_data$avg_rank), , drop = FALSE]
 rownames(RS_data) <- NULL
@@ -609,11 +615,11 @@ write.csv(missing_gene_name_rows,
 
 # -------------------------
 # Post-ranking annotation audit
-# Genes that were ranked but could not be matched to ML scores and/or citation
-# counts.
+# Genes that were ranked but could not be matched to ML scores, citation
+# counts, and/or druggability scores.
 # -------------------------
 
-annotation_check_cols <- c("counts", "Prediction_Score_rf")
+annotation_check_cols <- c("counts", "Prediction_Score_rf", "drug_score")
 present_annot_cols    <- intersect(annotation_check_cols, colnames(RS_data))
 
 if (length(present_annot_cols) > 0) {

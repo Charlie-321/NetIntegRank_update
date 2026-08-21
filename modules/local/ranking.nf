@@ -89,14 +89,14 @@ process RANKING {
   stub:
     """
     cat > final_ranked.tsv <<'EOF'
-external_gene_name	ensembl_gene_id	uniprot_gn_id	avg_rank	rank_variance	counts	Prediction_Score_rf
-GENE1	ENSG000001	P12345	1.25	0.30	100	0.91
-GENE2	ENSG000002	Q99999	2.10	0.55	250	0.73
+external_gene_name	ensembl_gene_id	uniprot_gn_id	avg_rank	rank_variance	counts	Prediction_Score_rf	drug_score
+GENE1	ENSG000001	P12345	1.25	0.30	100	0.91	0.62
+GENE2	ENSG000002	Q99999	2.10	0.55	250	0.73	0.48
 EOF
 
     cat > final_ranked_incomplete.tsv <<'EOF'
 ensembl_gene_id	external_gene_name	missing_fields
-ENSG000003	GENE3	drug_score
+ENSG000003	GENE3	degree
 EOF
 
     cat > final_ranked_missing_external_gene_name.csv <<'EOF'
@@ -105,8 +105,8 @@ EOF
 EOF
 
     cat > final_ranked_missing_annotations.tsv <<'EOF'
-external_gene_name	ensembl_gene_id	uniprot_gn_id	avg_rank	rank_variance	counts	Prediction_Score_rf	missing_annotation_fields
-GENE5	ENSG000005	NA	3.80	0.42	NA	NA	counts;Prediction_Score_rf
+external_gene_name	ensembl_gene_id	uniprot_gn_id	avg_rank	rank_variance	counts	Prediction_Score_rf	drug_score	missing_annotation_fields
+GENE5	ENSG000005	NA	3.80	0.42	NA	NA	NA	counts;Prediction_Score_rf;drug_score
 EOF
 
     touch final_ranked.rds
