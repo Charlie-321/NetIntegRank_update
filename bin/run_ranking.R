@@ -253,46 +253,89 @@ id_annot <- function(data, input_type = "external_gene_name", cache_path = NULL)
 
   fetched <- data.frame()
   if (length(missing_keys) > 0) {
-    if (!requireNamespace("biomaRt", quietly = TRUE)) {
-      stop("Package 'biomaRt' is required when --gene_map is not supplied and cache is incomplete.",
+    if (!requireNamespace("httr", quietly = TRUE)) {
+      stop("Package 'httr' is required when --gene_map is not supplied and cache is incomplete.",
            call. = FALSE)
     }
 
-    ensembl <- biomaRt::useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl")
-    bm <- biomaRt::getBM(
-      attributes = c(input_type, "uniprotswissprot", "uniprot_gn_id"),
-      filters = input_type,
-      values = missing_keys,
-      mart = ensembl
-    )
+    # Query Ensembl's REST API rather than BioMart. Same source data, but it avoids
+    # biomaRt's BioMart host/archive resolution, which fails hard when
+    # www.ensembl.org redirects its archive listing page to an archive site.
+    # UniProt accessions come from the per-gene xrefs endpoint (no batch version),
+    # so the first run makes one request per gene; results persist in the
+    # id_annot cache so later runs make no requests for already-seen keys.
+    rest_json <- function(url) {
+      resp <- tryCatch(
+        httr::RETRY("GET", url,
+                    httr::add_headers("Accept" = "application/json"),
+                    httr::timeout(60),
+                    times = 4, pause_base = 5, pause_cap = 30,
+                    quiet = TRUE),
+        error = function(e) NULL)
+      if (is.null(resp)) return(NULL)
+      if (httr::status_code(resp) != 200L) return(NULL)
+      httr::content(resp, as = "parsed", type = "application/json")
+    }
 
+    # Resolve keys to Ensembl gene IDs (batch endpoint; keys may already be IDs).
+    key_to_id <- setNames(rep(NA_character_, length(missing_keys)), missing_keys)
+    if (input_type == "ensembl_gene_id") {
+      key_to_id[] <- missing_keys
+    } else {
+      batches <- split(missing_keys, ceiling(seq_along(missing_keys) / 900))
+      for (b in batches) {
+        resp <- tryCatch(
+          httr::RETRY("POST", "https://rest.ensembl.org/lookup/symbol/homo_sapiens",
+                      httr::add_headers("Content-Type" = "application/json",
+                                        "Accept" = "application/json"),
+                      body = list(symbols = as.list(b)), encode = "json",
+                      httr::timeout(120),
+                      times = 5, pause_base = 5, pause_cap = 30,
+                      quiet = TRUE),
+          error = function(e) {
+            stop(sprintf("Ensembl REST lookup failed for a batch of %d symbol(s): %s",
+                         length(b), conditionMessage(e)), call. = FALSE)
+          })
+        if (httr::status_code(resp) != 200L) {
+          stop(sprintf("Ensembl REST lookup returned HTTP %s for a batch of %d symbol(s).",
+                       httr::status_code(resp), length(b)), call. = FALSE)
+        }
+        hits <- httr::content(resp, as = "parsed", type = "application/json")
+        for (k in names(hits)) {
+          if (!is.null(hits[[k]]) && !is.null(hits[[k]]$id)) key_to_id[[k]] <- hits[[k]]$id
+        }
+      }
+    }
+
+    # Per-gene UniProt xrefs: prefer Uniprot/SWISSPROT, else Uniprot_gn
+    # (same preference as the original biomaRt attribute selection).
     fetched <- data.frame(
       setNames(list(missing_keys, rep(NA_character_, length(missing_keys))),
                c(input_type, "uniprot_gn_id")),
       stringsAsFactors = FALSE
     )
 
-    if (nrow(bm) > 0) {
-      bm[[input_type]] <- trimws(as.character(bm[[input_type]]))
-      bm$uniprotswissprot <- trimws(as.character(bm$uniprotswissprot))
-      bm$uniprot_gn_id <- trimws(as.character(bm$uniprot_gn_id))
+    n_done <- 0L
+    for (key in missing_keys) {
+      n_done <- n_done + 1L
+      if (n_done %% 500L == 0L) {
+        message(sprintf("id_annot: uniprot xrefs %d/%d", n_done, length(missing_keys)))
+      }
+      gid <- key_to_id[[key]]
+      if (is.na(gid)) next
 
-      by_key <- split(bm, bm[[input_type]])
-      mapped <- lapply(by_key, function(df_sub) {
-        swiss <- unique(df_sub$uniprotswissprot[!is.na(df_sub$uniprotswissprot) & nzchar(df_sub$uniprotswissprot)])
-        gids  <- unique(df_sub$uniprot_gn_id[!is.na(df_sub$uniprot_gn_id) & nzchar(df_sub$uniprot_gn_id)])
-        picked <- if (length(swiss) > 0) swiss else gids
+      xr <- rest_json(sprintf(
+        "https://rest.ensembl.org/xrefs/id/%s?all_levels=1;content-type=application/json", gid))
+      if (is.null(xr) || length(xr) == 0) next
 
-        data.frame(
-          setNames(list(df_sub[[input_type]][1], if (length(picked) > 0) paste(picked, collapse = ";") else NA_character_),
-                   c(input_type, "uniprot_gn_id")),
-          stringsAsFactors = FALSE
-        )
-      })
-
-      mapped <- do.call(rbind, mapped)
-      idx <- match(mapped[[input_type]], fetched[[input_type]])
-      fetched$uniprot_gn_id[idx] <- mapped$uniprot_gn_id
+      dbn <- vapply(xr, function(x) if (is.null(x$dbname)) "" else x$dbname, character(1))
+      pid <- vapply(xr, function(x) if (is.null(x$primary_id)) "" else x$primary_id, character(1))
+      swiss <- unique(pid[dbn == "Uniprot/SWISSPROT" & nzchar(pid)])
+      gids  <- unique(pid[dbn == "Uniprot_gn" & nzchar(pid)])
+      picked <- if (length(swiss) > 0) swiss else gids
+      if (length(picked) > 0) {
+        fetched$uniprot_gn_id[fetched[[input_type]] == key] <- paste(picked, collapse = ";")
+      }
     }
 
     if (!is.null(cache_path) && nzchar(cache_path)) {
