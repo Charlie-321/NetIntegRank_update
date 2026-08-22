@@ -5,8 +5,11 @@ ppi_network: assets/STRING_physical_ENSG.csv
 druggability: assets/druggability_scores_annot2.0.csv
 ml_scores: assets/ML_data.csv
 citations: assets/PubTator3_counts.csv
-gene_map: null
-id_annot_cache: null
+
+gene_map: null # online download mode. Annotate or delete  this line, then nextflow.config parameter is used, where gene_map_ensembl_uniprot in assets folder will be used in RANKING stage
+hhnet_id_annot_cache: null # online download mode. Annotate or delete this line, then nextflow.config parameter is used, where hhnet_post_id_annot_cache in assets folder will be used in HHNET_POST stage
+
+id_annot_cache: null # only used in online download mode to save gene_map cache
 
 hhnet_run_id: MOC_run # edit with more appropriate name i.e. breast_cancer
 hhnet_num_permutations: 100
