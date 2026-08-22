@@ -6,10 +6,13 @@ druggability: assets/druggability_scores_annot2.0.csv
 ml_scores: assets/ML_data.csv
 citations: assets/PubTator3_counts.csv
 
-gene_map: null # online download mode. Annotate or delete  this line, then nextflow.config parameter is used, where gene_map_ensembl_uniprot in assets folder will be used in RANKING stage
-hhnet_id_annot_cache: null # online download mode. Annotate or delete this line, then nextflow.config parameter is used, where hhnet_post_id_annot_cache in assets folder will be used in HHNET_POST stage
+hhnet_id_annot_cache: null # online realtime download mode. Annotate this line, offline mode, nextflow.config parameter is used, where hhnet_post_id_annot_cache in assets folder will be used in HHNET_POST stage
+#hhnet_id_annot_cache: /scratch/users/lcao/netintegrank_update/run_netintegrank_notes/hhnet_id_annot_cache.tsv # cache loop mode, annotate above line and uncomment this line to use local cache file
 
-id_annot_cache: null # only used in online download mode to save gene_map cache
+gene_map: null # online realtime download mode. Annotate this line, offline mode, nextflow.config parameter is used, where gene_map_ensembl_uniprot in assets folder will be used in RANKING stage
+
+id_annot_cache: null # Skipped when gene_map is in offline mode; used but not loop cached when gene_map in online realtime download mode
+#id_annot_cache: /scratch/users/lcao/netintegrank_update/run_netintegrank_notes/ranking_id_annot_cache.tsv # Skipped when gene_map is in offline mode; used and loop cached when gene_map in online realtime download mode
 
 hhnet_run_id: MOC_run # edit with more appropriate name i.e. breast_cancer
 hhnet_num_permutations: 100
