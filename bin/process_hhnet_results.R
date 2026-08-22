@@ -213,57 +213,82 @@ id_annot <- function(data, input_type, convert_to, cache_path = NULL) {
   colnames(fetched) <- cache_cols
 
   if (length(missing_keys) > 0) {
-    if (!requireNamespace("biomaRt", quietly = TRUE)) {
-      stop("Package 'biomaRt' is required when cache is incomplete.", call. = FALSE)
+    if (!requireNamespace("httr", quietly = TRUE)) {
+      stop("Package 'httr' is required when cache is incomplete.", call. = FALSE)
+    }
+    if ("uniprot_gn_id" %in% convert_to) {
+      stop("id_annot: uniprot_gn_id is not available from the Ensembl REST lookup endpoint.",
+           call. = FALSE)
     }
 
-    ensembl <- biomaRt::useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+    # Query Ensembl's REST API rather than BioMart. Same source data, but it avoids
+    # biomaRt's BioMart host/archive resolution, which fails hard when
+    # www.ensembl.org redirects its archive listing page to an archive site.
+    rest_lookup_batch <- function(ids, by) {
+      if (by == "ensembl_gene_id") {
+        endpoint <- "https://rest.ensembl.org/lookup/id"
+        body <- list(ids = as.list(ids))
+      } else {
+        endpoint <- "https://rest.ensembl.org/lookup/symbol/homo_sapiens"
+        body <- list(symbols = as.list(ids))
+      }
 
-    # Always include external_gene_name/description/gene_biotype/ensembl_gene_id so we can build rows robustly
-    attrs <- unique(c(input_type, "ensembl_gene_id", "external_gene_name", "description", "gene_biotype",
-                      "uniprotswissprot", "uniprot_gn_id"))
+      resp <- tryCatch(
+        httr::RETRY("POST", endpoint,
+                    httr::add_headers("Content-Type" = "application/json",
+                                      "Accept" = "application/json"),
+                    body = body, encode = "json",
+                    httr::timeout(120),
+                    times = 5, pause_base = 5, pause_cap = 30,
+                    quiet = TRUE),
+        error = function(e) {
+          stop(sprintf("Ensembl REST request failed for a batch of %d id(s): %s",
+                       length(ids), conditionMessage(e)), call. = FALSE)
+        })
 
-    bm <- biomaRt::getBM(
-      attributes = attrs,
-      filters = input_type,
-      values = missing_keys,
-      mart = ensembl
-    )
+      if (httr::status_code(resp) != 200L) {
+        stop(sprintf("Ensembl REST lookup returned HTTP %s for a batch of %d id(s).",
+                     httr::status_code(resp), length(ids)), call. = FALSE)
+      }
+      httr::content(resp, as = "parsed", type = "application/json")
+    }
 
-    if (nrow(bm) > 0) {
-      by_key <- split(bm, bm[[input_type]])
-      out_list <- lapply(by_key, function(df_sub) {
+    # POST lookup endpoints accept up to 1000 ids per call.
+    batches <- split(missing_keys, ceiling(seq_along(missing_keys) / 900))
+    hits <- list()
+    for (b in batches) hits <- c(hits, rest_lookup_batch(b, by = input_type))
+
+    if (length(hits) > 0) {
+      out_list <- Map(function(key, rec) {
+        if (is.null(rec)) return(NULL)
+
         row <- as.list(setNames(rep(NA_character_, length(cache_cols)), cache_cols))
-        row[[input_type]] <- as.character(df_sub[[input_type]][1])
+        row[[input_type]] <- key
 
-        # collapse helpers
-        pick <- function(col) {
-          if (!col %in% colnames(df_sub)) return(NA_character_)
-          vals <- unique(stats::na.omit(ifelse(df_sub[[col]] == "", NA, df_sub[[col]])))
-          if (length(vals) == 0) return(NA_character_)
-          paste(vals, collapse = ";")
+        take <- function(field) {
+          v <- rec[[field]]
+          if (is.null(v) || !nzchar(as.character(v))) NA_character_ else as.character(v)
         }
 
-        if ("ensembl_gene_id" %in% convert_to) row[["ensembl_gene_id"]] <- pick("ensembl_gene_id")
-        if ("external_gene_name" %in% convert_to) row[["external_gene_name"]] <- pick("external_gene_name")
-        if ("gene_biotype" %in% convert_to) row[["gene_biotype"]] <- pick("gene_biotype")
-        if ("description" %in% convert_to) {
-          d <- pick("description")
-          if (!is.na(d)) d <- gsub("\\[.*?\\]", "", d)
-          row[["description"]] <- d
-        }
-
-        if ("uniprot_gn_id" %in% convert_to) {
-          swiss <- unique(stats::na.omit(ifelse(df_sub$uniprotswissprot == "", NA, df_sub$uniprotswissprot)))
-          gids  <- unique(stats::na.omit(ifelse(df_sub$uniprot_gn_id == "", NA, df_sub$uniprot_gn_id)))
-          selected <- if (length(swiss) > 0) swiss else gids
-          row[["uniprot_gn_id"]] <- if (length(selected) > 0) paste(selected, collapse = ";") else NA_character_
+        for (target in setdiff(convert_to, input_type)) {
+          row[[target]] <- switch(target,
+            ensembl_gene_id    = take("id"),
+            external_gene_name = take("display_name"),
+            gene_biotype       = take("biotype"),
+            description        = {
+              d <- take("description")
+              if (!is.na(d)) d <- gsub("\\[.*?\\]", "", d)
+              d
+            },
+            NA_character_
+          )
         }
 
         as.data.frame(row, stringsAsFactors = FALSE)
-      })
+      }, names(hits), hits)
 
-      fetched <- do.call(rbind, out_list)
+      out_list <- out_list[!vapply(out_list, is.null, logical(1))]
+      if (length(out_list) > 0) fetched <- do.call(rbind, out_list)
     }
 
     if (!is.null(cache_path) && nzchar(cache_path) && nrow(fetched) > 0) {
