@@ -13,6 +13,10 @@ process HHNET_POST {
     path "hhnet_processing", emit: artefacts_dir
 
   script:
+    def cachePath = (params.hhnet_id_annot_cache && params.hhnet_id_annot_cache.toString().trim()) \
+      ? params.hhnet_id_annot_cache.toString() \
+      : "hhnet_processing/id_annot_cache.tsv"
+
     """
     mkdir -p hhnet_processing
 
@@ -24,7 +28,7 @@ process HHNET_POST {
       --n_clusters ${params.hhnet_n_clusters ?: 0} \
       --seed ${params.hhnet_seed ?: 1234} \
       --node_id_type ${params.hhnet_node_id_type ?: 'ensembl_gene_id'} \
-      --id_annot_cache hhnet_processing/id_annot_cache.tsv \
+      --id_annot_cache '${cachePath}' \
       --extra_colours "${params.hhnet_extra_colours ?: ''}" \
       --plot_max_nodes ${params.hhnet_plot_max_nodes ?: 5000}
 
