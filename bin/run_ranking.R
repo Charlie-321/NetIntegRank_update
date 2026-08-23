@@ -147,6 +147,27 @@ first_id <- function(x) {
   }, character(1))
 }
 
+# Same as first_id(), with a conservative fallback: when the first accession is
+# absent from `keys` (the ML score table) but exactly one of the remaining
+# accessions is present, join on that one instead. Lists where the first
+# accession already matches keep their previous value, and lists with more than
+# one candidate are deliberately left unmatched rather than guessed at.
+first_scored_id <- function(x, keys) {
+  x <- trimws(as.character(x))
+  x[!nzchar(x)] <- NA_character_
+
+  keys <- unique(keys[!is.na(keys)])
+  parts <- strsplit(replace(x, is.na(x), ""), ";", fixed = TRUE)
+  vapply(parts, function(vals) {
+    vals <- trimws(vals)
+    vals <- vals[nzchar(vals)]
+    if (length(vals) == 0) return(NA_character_)
+    if (vals[1] %in% keys) return(vals[1])
+    hits <- unique(vals[vals %in% keys])
+    if (length(hits) == 1L) hits else vals[1]
+  }, character(1))
+}
+                                   
 left_join_first <- function(x, y, by_x, by_y = by_x, cols_y = NULL) {
   if (is.null(cols_y)) cols_y <- setdiff(colnames(y), by_y)
   idx <- match(x[[by_x]], y[[by_y]])
@@ -330,9 +351,25 @@ id_annot <- function(data, input_type = "external_gene_name", cache_path = NULL)
 
       dbn <- vapply(xr, function(x) if (is.null(x$dbname)) "" else x$dbname, character(1))
       pid <- vapply(xr, function(x) if (is.null(x$primary_id)) "" else x$primary_id, character(1))
-      swiss <- unique(pid[dbn == "Uniprot/SWISSPROT" & nzchar(pid)])
-      gids  <- unique(pid[dbn == "Uniprot_gn" & nzchar(pid)])
-      picked <- if (length(swiss) > 0) swiss else gids
+      swiss  <- unique(pid[dbn == "Uniprot/SWISSPROT" & nzchar(pid)])
+      trembl <- unique(pid[dbn == "Uniprot/SPTREMBL"  & nzchar(pid)])
+      gids   <- unique(pid[dbn == "Uniprot_gn"        & nzchar(pid)])
+      if (length(swiss) > 0) {
+        picked <- swiss
+      } else {
+        # No SWISSPROT xref for this gene. Uniprot_gn is a bulk-imported,
+        # unordered mix of reviewed and unreviewed accessions, so reconstruct
+        # the reviewed-first ordering biomaRt used to provide: drop anything
+        # explicitly flagged TrEMBL to the back, and within the remainder put
+        # the classic reviewed accession pattern first.
+        reviewed_pattern <- "^[OPQ][0-9][A-Z0-9]{3}[0-9]$"
+        keep <- setdiff(gids, trembl)
+        picked <- c(keep[grepl(reviewed_pattern, keep)],
+                    keep[!grepl(reviewed_pattern, keep) & nchar(keep) == 6L],
+                    keep[!grepl(reviewed_pattern, keep) & nchar(keep) != 6L],
+                    intersect(gids, trembl))
+      }
+ 
       if (length(picked) > 0) {
         fetched$uniprot_gn_id[fetched[[input_type]] == key] <- paste(picked, collapse = ";")
       }
@@ -608,7 +645,7 @@ if (!is.null(args$gene_map) && nzchar(args$gene_map)) {
   RS_data <- id_annot(RS_data, input_type = "external_gene_name", cache_path = id_annot_cache_path)
 }
 
-RS_data$join_uniprot_gn_id <- first_id(RS_data$uniprot_gn_id)
+RS_data$join_uniprot_gn_id <- first_scored_id(RS_data$uniprot_gn_id, ml_scores$Protein)
 
 ml_scores <- keep_max_by_key(
   ml_scores[, c("Protein", "Prediction_Score_rf"), drop = FALSE],
