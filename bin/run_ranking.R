@@ -167,7 +167,7 @@ first_scored_id <- function(x, keys) {
     if (length(hits) == 1L) hits else vals[1]
   }, character(1))
 }
-                                   
+
 left_join_first <- function(x, y, by_x, by_y = by_x, cols_y = NULL) {
   if (is.null(cols_y)) cols_y <- setdiff(colnames(y), by_y)
   idx <- match(x[[by_x]], y[[by_y]])
@@ -343,7 +343,6 @@ id_annot <- function(data, input_type = "external_gene_name", cache_path = NULL)
       stringsAsFactors = FALSE
     )
 
-    n_done <- 0L
     # Only rows whose lookup actually completed may be written to the cache.
     # A gene whose request failed must stay out of it, otherwise a transient
     # Ensembl outage is recorded as "this gene has no UniProt accession" and is
@@ -396,7 +395,7 @@ id_annot <- function(data, input_type = "external_gene_name", cache_path = NULL)
                     keep[!grepl(reviewed_pattern, keep) & nchar(keep) != 6L],
                     intersect(gids, trembl))
       }
- 
+
       if (length(picked) > 0) {
         fetched$uniprot_gn_id[fetched[[input_type]] == key] <- paste(picked, collapse = ";")
       }
