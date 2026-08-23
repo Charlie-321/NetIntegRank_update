@@ -245,7 +245,14 @@ upsert_annotation_cache <- function(cache_path, input_type, annotation_df) {
     dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
   }
 
-  write.table(cache_df, file = cache_path, sep = "\t", row.names = FALSE, quote = FALSE)
+  # Write via a temporary file and rename, so that a run interrupted during the
+  # write leaves the previous cache intact rather than a truncated one.
+  tmp_path <- paste0(cache_path, ".tmp", Sys.getpid())
+  write.table(cache_df, file = tmp_path, sep = "\t", row.names = FALSE, quote = FALSE)
+  if (!file.rename(tmp_path, cache_path)) {
+    file.copy(tmp_path, cache_path, overwrite = TRUE)
+    unlink(tmp_path)
+  }
   cache_df
 }
 
@@ -337,17 +344,37 @@ id_annot <- function(data, input_type = "external_gene_name", cache_path = NULL)
     )
 
     n_done <- 0L
+    # Only rows whose lookup actually completed may be written to the cache.
+    # A gene whose request failed must stay out of it, otherwise a transient
+    # Ensembl outage is recorded as "this gene has no UniProt accession" and is
+    # never retried on a later run.
+    confirmed <- rep(FALSE, length(missing_keys))
+
+    flush_every <- 200L
+    n_done <- 0L
     for (key in missing_keys) {
       n_done <- n_done + 1L
       if (n_done %% 500L == 0L) {
         message(sprintf("id_annot: uniprot xrefs %d/%d", n_done, length(missing_keys)))
       }
+
+      # Persist progress periodically so that a job killed mid-run (e.g. by a
+      # scheduler time limit) can resume from the cache instead of starting over.
+      if (!is.null(cache_path) && nzchar(cache_path) &&
+          n_done %% flush_every == 1L && any(confirmed)) {
+        cached <- upsert_annotation_cache(cache_path, input_type,
+                                          fetched[confirmed, , drop = FALSE])
+      }
+
       gid <- key_to_id[[key]]
       if (is.na(gid)) next
 
       xr <- rest_json(sprintf(
-        "https://rest.ensembl.org/xrefs/id/%s?all_levels=1;content-type=application/json", gid))
-      if (is.null(xr) || length(xr) == 0) next
+        paste0("https://rest.ensembl.org/xrefs/id/%s",
+               "?all_levels=1;external_db=Uniprot%%25;content-type=application/json"), gid))
+      if (is.null(xr)) next
+      confirmed[n_done] <- TRUE
+      if (length(xr) == 0) next
 
       dbn <- vapply(xr, function(x) if (is.null(x$dbname)) "" else x$dbname, character(1))
       pid <- vapply(xr, function(x) if (is.null(x$primary_id)) "" else x$primary_id, character(1))
@@ -375,8 +402,9 @@ id_annot <- function(data, input_type = "external_gene_name", cache_path = NULL)
       }
     }
 
-    if (!is.null(cache_path) && nzchar(cache_path)) {
-      cached <- upsert_annotation_cache(cache_path, input_type, fetched)
+    if (!is.null(cache_path) && nzchar(cache_path) && any(confirmed)) {
+      cached <- upsert_annotation_cache(cache_path, input_type,
+                                        fetched[confirmed, , drop = FALSE])
     }
   }
 
